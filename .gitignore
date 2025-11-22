@@ -1,1 +1,30 @@
+# Virtual environments
+venv/
+ENV/
+.env/
 
+# Python bytecode
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Local config / secrets
+.env
+*.env
+credentials.json
+token.json
+
+# Logs and output
+*.log
+results/
+archive/
+
+# Editor / OS files
+.cursor/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Notebook checkpoints
+.ipynb_checkpoints/
