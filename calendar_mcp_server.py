@@ -248,13 +248,17 @@ def get_date_range(date_str: str) -> tuple:
     try:
         # Parse the date string using enhanced natural language parsing
         date = parse_natural_language_date(date_str)
-        
-        # Create start and end timestamps for the entire day
-        start_datetime = datetime.datetime.combine(date, datetime.time.min)
-        end_datetime = datetime.datetime.combine(date, datetime.time.max)
-        
-        logger.info(f"Date range: {start_datetime.isoformat()} to {end_datetime.isoformat()}")
-        return start_datetime.isoformat() + 'Z', end_datetime.isoformat() + 'Z'
+        local_tz = datetime.datetime.now().astimezone().tzinfo
+
+        # Create start and end timestamps for the entire day in local time, preserving offset
+        start_datetime = datetime.datetime.combine(date, datetime.time.min, tzinfo=local_tz)
+        end_datetime = datetime.datetime.combine(date, datetime.time.max, tzinfo=local_tz)
+
+        logger.info(
+            f"Date range (local tz {local_tz}): "
+            f"{start_datetime.isoformat()} to {end_datetime.isoformat()}"
+        )
+        return start_datetime.isoformat(), end_datetime.isoformat()
     except Exception as e:
         error_msg = f"Invalid date format: {e}"
         logger.error(error_msg)
@@ -315,23 +319,20 @@ def list_events(date_start: str, date_end=None) -> str:
     logger.info(f"Tool call: list_events(date_start='{date_start}', date_end='{date_end}')")
     try:
         service = get_calendar_service()
-        
-        # Parse the start date using enhanced natural language parsing
+
+        # Parse date range in local time (so "today" matches the user's day)
         try:
-            start_date = parse_natural_language_date(date_start)
-            start_time = datetime.datetime.combine(start_date, datetime.time.min).isoformat() + 'Z'
+            start_time, _ = get_date_range(date_start)
         except ValueError as e:
             return f"Error listing calendar events: {str(e)}"
-        
-        # If end date is provided, parse it; otherwise, use the start date
+
         if date_end:
             try:
-                end_date = parse_natural_language_date(date_end)
-                end_time = datetime.datetime.combine(end_date, datetime.time.max).isoformat() + 'Z'
+                _, end_time = get_date_range(date_end)
             except ValueError as e:
                 return f"Error parsing end date: {str(e)}"
         else:
-            end_time = datetime.datetime.combine(start_date, datetime.time.max).isoformat() + 'Z'
+            _, end_time = get_date_range(date_start)
         
         logger.info(f"Fetching events between {start_time} and {end_time}")
         events_result = service.events().list(
