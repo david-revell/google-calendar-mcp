@@ -220,7 +220,7 @@ def main():
     print("\n=== Google Calendar MCP Agent (Attempt 4 v3) ===")
     print("Type 'exit' to quit.")
 
-    # Enable persistent conversation memory by saving all turns into chat_history.db
+    # SQLiteSession persists conversation history in chat_history.db (file grows over time; delete to reset)
     session = SQLiteSession(session_id="calendar_repl", db_path="chat_history.db")
     turn = 0
 
