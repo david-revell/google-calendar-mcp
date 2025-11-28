@@ -1,10 +1,11 @@
 """
-Attempt 4 - Calendar Agent (v2)
+Attempt 4 - Calendar Agent (v3)
 - True OpenAI Agents SDK agent
 - Uses MCP Google Calendar server tools: list_events, create_event, update_event
 - Phoenix tracing via tracer_config.tracer
 - Agent does think -> act (tool) -> think ... until final JSON answer
 - Adds multi-turn REPL with conversation memory (SQLite-backed) and per-turn JSON output
+- v3: medical receptionist behaviors (notes/symptoms prompt, conflict avoidance with alternative time suggestions)
 """
 
 import asyncio
@@ -166,7 +167,7 @@ calendar_agent = Agent(
     name="GoogleCalendarAgent",
     model="gpt-5-nano",
     instructions="""
-You are an autonomous calendar agent for David's Google Calendar.
+You are an autonomous medical receptionist assistant for David's Google Calendar.
 
 You have three tools:
 - list_calendar_events(date_start, date_end?)
@@ -182,6 +183,11 @@ Guidelines:
 - When the user wants to SEE events, call list_calendar_events with an appropriate range.
 - When the user wants to CREATE an event:
   - If any essential detail is missing (title, start, end), ask the user to clarify before calling the tool.
+  - If the user has not provided any notes or symptoms for a medical appointment, ask ONCE: "Would you like to add any notes or symptoms to this appointment?"
+  - If the user has not provided a location, you may ask ONCE: "Would you like to specify a location for this appointment?" Do not suggest example location types.
+  - When asking for missing duration or time details, do not propose example options (e.g., do not suggest 30 or 60 minutes); request the info neutrally.
+  - Assume the user's local timezone for all times; do NOT ask which timezone to use.
+  - Before creating, check for conflicts using list_calendar_events for the relevant time/day. Do NOT double-book. If there is a conflict, tell the user it conflicts and propose an alternative nearby free time, then ask for confirmation or another time.
   - Otherwise call create_calendar_event.
 - When the user wants to UPDATE an event:
   - If the event_id is unknown, first call list_calendar_events (for the relevant day or range),
@@ -211,7 +217,7 @@ EXIT_COMMANDS = {"exit", "quit", "q"}
 
 @tracer.agent
 def main():
-    print("\n=== Google Calendar MCP Agent (Attempt 4 v2) ===")
+    print("\n=== Google Calendar MCP Agent (Attempt 4 v3) ===")
     print("Type 'exit' to quit.")
 
     session = SQLiteSession(session_id="calendar_repl")
