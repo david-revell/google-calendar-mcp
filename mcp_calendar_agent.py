@@ -1,9 +1,10 @@
 """
-Attempt 4 — Calendar Agent (v1)
+Attempt 4 - Calendar Agent (v2)
 - True OpenAI Agents SDK agent
 - Uses MCP Google Calendar server tools: list_events, create_event, update_event
 - Phoenix tracing via tracer_config.tracer
-- Agent does think → act (tool) → think ... until final JSON answer
+- Agent does think -> act (tool) -> think ... until final JSON answer
+- Adds multi-turn REPL with conversation memory (SQLite-backed) and per-turn JSON output
 """
 
 import asyncio
@@ -11,6 +12,7 @@ from typing import Optional
 
 from openai import OpenAI  # not strictly needed, but matches qna_agent pattern
 from agents import Agent, Runner, function_tool
+from agents.memory.sqlite_session import SQLiteSession
 from mcp.client.stdio import stdio_client
 from mcp import ClientSession, StdioServerParameters
 
@@ -19,7 +21,7 @@ from tracer_config import tracer
 client = OpenAI()
 
 # ---------------------------------------------------------------------
-# MCP bridge (async → sync) 
+# MCP bridge (async)
 # ---------------------------------------------------------------------
 
 SERVER_COMMAND = "python"
@@ -59,6 +61,7 @@ async def _call_mcp(tool_name: str, args: dict) -> str:
 async def call_mcp(tool_name: str, args: dict) -> str:
     """Async wrapper so tools can await MCP without blocking the event loop."""
     return await _call_mcp(tool_name, args)
+
 
 # ---------------------------------------------------------------------
 # Tools exposed to the Agent (SDK @function_tool)
@@ -171,7 +174,7 @@ You have three tools:
 - update_calendar_event(event_id, summary?, start_datetime?, end_datetime?, description?, location?)
 
 General behaviour:
-- Think step-by-step: PLAN → use tools → observe results → PLAN again until the task is complete.
+- Think step-by-step: PLAN -> use tools -> observe results -> PLAN again until the task is complete.
 - You may call tools multiple times in one run.
 - Use natural language time like "today", "tomorrow", "next Thursday" when helpful; the MCP server can parse them.
 
@@ -200,27 +203,49 @@ Final answer format (always):
 
 
 # ---------------------------------------------------------------------
-# Simple REPL entrypoint (like qna_agent_phoenix_v5)
+# Multi-turn REPL entrypoint with session memory
 # ---------------------------------------------------------------------
+
+EXIT_COMMANDS = {"exit", "quit", "q"}
+
 
 @tracer.agent
 def main():
-    print("\n=== Google Calendar MCP Agent (Attempt 4 v1) ===")
-    user_input = input("You: ").strip()
-    if not user_input:
-        print("No input provided.")
-        return
+    print("\n=== Google Calendar MCP Agent (Attempt 4 v2) ===")
+    print("Type 'exit' to quit.")
 
-    result = Runner.run_sync(calendar_agent, user_input)
+    session = SQLiteSession(session_id="calendar_repl")
+    turn = 0
 
-    # Trace final output for Phoenix
-    with tracer.start_as_current_span("calendar_agent_final_response") as span:
-        preview = str(result.final_output)[:200] if hasattr(result, "final_output") else ""
-        span.set_attribute("user_input", user_input)
-        span.set_attribute("final_output_preview", preview)
+    try:
+        while True:
+            user_input = input("You: ").strip()
 
-    print("\n=== Agent final_output ===")
-    print(result.final_output)
+            if not user_input:
+                print("No input provided.")
+                continue
+
+            if user_input.lower() in EXIT_COMMANDS:
+                print("Exiting.")
+                break
+
+            turn += 1
+
+            result = Runner.run_sync(calendar_agent, user_input, session=session)
+
+            # Trace final output for Phoenix (per turn)
+            with tracer.start_as_current_span("calendar_agent_final_response") as span:
+                preview = str(result.final_output)[:200] if hasattr(result, "final_output") else ""
+                span.set_attribute("user_input", user_input)
+                span.set_attribute("final_output_preview", preview)
+                span.set_attribute("turn", turn)
+
+            print("\n=== Agent final_output ===")
+            print(result.final_output)
+    finally:
+        close_fn = getattr(session, "close", None)
+        if callable(close_fn):
+            close_fn()
 
 
 if __name__ == "__main__":
