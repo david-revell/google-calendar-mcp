@@ -1,15 +1,15 @@
 """
-Attempt 4 - Calendar Agent (v3)
-- True OpenAI Agents SDK agent
-- Uses MCP Google Calendar server tools: list_events, create_event, update_event
-- Phoenix tracing via tracer_config.tracer
+Attempt 4 - Calendar Agent (v4)
+- Focus: tracing clarity and per-run isolation
+- True OpenAI Agents SDK agent with MCP Google Calendar tools (list/create/update events)
+- Phoenix tracing via tracer_config.tracer; per-turn spans capture turn, input preview, input length
+- Per-run session_id now timestamped to avoid history bleed in chat_history.db
 - Agent does think -> act (tool) -> think ... until final JSON answer
-- Adds multi-turn REPL with conversation memory (SQLite-backed) and per-turn JSON output
-- v3: medical receptionist behaviors (notes/symptoms prompt, conflict avoidance with alternative time suggestions)
 """
 
 import asyncio
 from typing import Optional
+from datetime import datetime
 
 from openai import OpenAI  # not strictly needed, but matches qna_agent pattern
 from agents import Agent, Runner, function_tool
@@ -18,6 +18,7 @@ from mcp.client.stdio import stdio_client
 from mcp import ClientSession, StdioServerParameters
 
 from tracer_config import tracer
+from opentelemetry import trace
 
 client = OpenAI()
 
@@ -79,15 +80,19 @@ async def list_calendar_events(date_start: str, date_end: Optional[str] = None) 
         if date_end:
             span.set_attribute("date_end", date_end)
 
-        text = await call_mcp(
-            "list_events",
-            {
-                "date_start": date_start,
-                "date_end": date_end,
-            },
-        )
-        span.set_attribute("mcp_result_preview", text[:200])
-        return text
+        try:
+            text = await call_mcp(
+                "list_events",
+                {
+                    "date_start": date_start,
+                    "date_end": date_end,
+                },
+            )
+            span.set_attribute("mcp_result_preview", text[:200])
+            return text
+        except Exception as exc:
+            span.add_event("tool_exception", {"tool": "list_events", "error": str(exc)})
+            raise
 
 
 @function_tool
@@ -118,9 +123,13 @@ async def create_calendar_event(
             "attendees": attendees,
         }
 
-        text = await call_mcp("create_event", args)
-        span.set_attribute("mcp_result_preview", text[:200])
-        return text
+        try:
+            text = await call_mcp("create_event", args)
+            span.set_attribute("mcp_result_preview", text[:200])
+            return text
+        except Exception as exc:
+            span.add_event("tool_exception", {"tool": "create_event", "error": str(exc)})
+            raise
 
 
 @function_tool
@@ -154,9 +163,13 @@ async def update_calendar_event(
             "location": location,
         }
 
-        text = await call_mcp("update_event", args)
-        span.set_attribute("mcp_result_preview", text[:200])
-        return text
+        try:
+            text = await call_mcp("update_event", args)
+            span.set_attribute("mcp_result_preview", text[:200])
+            return text
+        except Exception as exc:
+            span.add_event("tool_exception", {"tool": "update_event", "error": str(exc)})
+            raise
 
 
 # ---------------------------------------------------------------------
@@ -215,13 +228,30 @@ Final answer format (always):
 EXIT_COMMANDS = {"exit", "quit", "q"}
 
 
-@tracer.agent
+# Wrap per-turn reasoning in a chain span for clearer tracing in Phoenix.
+@tracer.chain(name="turn_logic")
+def run_turn_logic(user_input: str, session: SQLiteSession, turn: int):
+    # Attach per-turn context to the chain span so it’s visible without expanding children.
+    span = trace.get_current_span()
+    if span:
+        span.set_attribute("turn", turn)
+        span.set_attribute("user_input_preview", user_input[:120])
+        span.set_attribute("user_input_len", len(user_input))
+    return Runner.run_sync(calendar_agent, user_input, session=session)
+
+
+# @tracer.agent
+@tracer.agent(name="mcp_calender_agent_Attempt4_v3")
 def main():
     print("\n=== Google Calendar MCP Agent (Attempt 4 v3) ===")
     print("Type 'exit' to quit.")
 
-    # SQLiteSession persists conversation history in chat_history.db (file grows over time; delete to reset)
-    session = SQLiteSession(session_id="calendar_repl", db_path="chat_history.db")
+    session_id = f"calendar_repl_{datetime.now().strftime('%Y%m%dT%H%M%S')}"
+    session = SQLiteSession(session_id=session_id, db_path="chat_history.db")
+    # Add session context to the root agent span for easier filtering in traces.
+    root_span = trace.get_current_span()
+    if root_span:
+        root_span.set_attribute("session_id", session_id)
     turn = 0
 
     try:
@@ -238,14 +268,23 @@ def main():
 
             turn += 1
 
-            result = Runner.run_sync(calendar_agent, user_input, session=session)
+            with tracer.start_as_current_span(
+                "calendar_turn",
+                attributes={
+                    "session_id": session_id,
+                    "turn": turn,
+                    "user_input_preview": user_input[:120],
+                    "user_input_len": len(user_input),
+                },
+            ):
+                result = run_turn_logic(user_input, session=session, turn=turn)
 
-            # Trace final output for Phoenix (per turn)
-            with tracer.start_as_current_span("calendar_agent_final_response") as span:
-                preview = str(result.final_output)[:200] if hasattr(result, "final_output") else ""
-                span.set_attribute("user_input", user_input)
-                span.set_attribute("final_output_preview", preview)
-                span.set_attribute("turn", turn)
+                # Trace final output for Phoenix (per turn)
+                with tracer.start_as_current_span("calendar_agent_final_response") as span:
+                    preview = str(result.final_output)[:200] if hasattr(result, "final_output") else ""
+                    span.set_attribute("user_input", user_input)
+                    span.set_attribute("final_output_preview", preview)
+                    span.set_attribute("turn", turn)
 
             print("\n=== Agent final_output ===")
             print(result.final_output)
