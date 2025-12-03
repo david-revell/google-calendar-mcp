@@ -1,10 +1,16 @@
 """
-Attempt 4 - Calendar Agent (v4)
-- Focus: tracing clarity and per-run isolation
-- True OpenAI Agents SDK agent with MCP Google Calendar tools (list/create/update events)
-- Phoenix tracing via tracer_config.tracer; per-turn spans capture turn, input preview, input length
-- Per-run session_id now timestamped to avoid history bleed in chat_history.db
-- Agent does think -> act (tool) -> think ... until final JSON answer
+Google Calendar MCP Agent (v4)
+
+Professional-grade agent built with the OpenAI Agents SDK.
+Uses Phoenix tracing (per-turn spans), an async MCP bridge, and SQLite session
+memory to manage real Google Calendar events via list/create/update tools.
+
+Features:
+- True think → act (tool) → think loop with final JSON output
+- Phoenix tracing for reasoning, tool spans, and MCP result previews
+- Per-run session IDs to avoid conversation bleed
+- Natural-language date handling (“tomorrow 3pm”, “next Monday”, ISO8601)
+- Full integration with the Google Calendar MCP server in this repo
 """
 
 import asyncio
